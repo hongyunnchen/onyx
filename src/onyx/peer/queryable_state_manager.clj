@@ -13,29 +13,34 @@
    (:onyx.core/task event)
    (:onyx.core/slot-id event)])
 
-(defn add-store [state peer-config [_ replica-version event exported]]
-  #_(let [serializers (onyx.state.serializers.utils/event->state-serializers event)]
+(defmulti process-store 
+  (fn [[cmd] _ _]
+    (println "CMD" cmd)
+    cmd)) 
+
+(defmethod process-store :created-db
+  [[_ replica-version event exported] state peer-config]
+  (let [serializers (onyx.state.serializers.utils/event->state-serializers event)]
     (swap! state 
            assoc 
            (state-key replica-version event)
-           {:state-indexes (ws/state-indexes event)
+           {:state-indices (ws/state-indices event)
             :db (db/open-db-reader peer-config exported serializers)})))
 
-(defn drop-store [state peer-config [_ replica-version event]]
-  #_(let [serializers (onyx.state.serializers.utils/event->state-serializers event)
+(defmethod process-store :drop-db 
+  [[_ event] state peer-config]
+  (let [serializers (onyx.state.serializers.utils/event->state-serializers event)
         k (state-key replica-version event)
         store (get @state k)]
     (db/close! store)
-    (swap! state dissoc k))) 
+    (swap! state dissoc k)))
 
 (defn processing-loop [peer-config shutdown state ch]
   (loop []
     (when-not @shutdown
       (if-let [cmd (poll! ch)]
-        (case (first cmd)
-          :created-db (add-store state peer-config cmd)
-          :drop-db (drop-store state peer-config cmd))
-         (LockSupport/parkNanos (* 10 1000000)))
+        (process-store cmd state peer-config)
+        (LockSupport/parkNanos (* 10 1000000)))
       (recur))))
 
 (defrecord OnyxStateStoreGroup [peer-config ch state shutdown]
